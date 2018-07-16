@@ -208,6 +208,14 @@ public class RecordsStreamProducer extends RecordsProducer {
         }
     }
 
+    private void commitLsn(ReplicationMessage message) {
+        if (message.isLastEventForLsn()) {
+            Map<String, ?> offset = sourceInfo.offset();
+            Long lastProcessedLsn = (Long)offset.get(SourceInfo.LSN_KEY);
+            commit(lastProcessedLsn);
+        }
+    }
+
     private void process(ReplicationMessage message, Long lsn, BlockingConsumer<ChangeEvent> consumer) throws SQLException, InterruptedException {
         if (message == null) {
             // in some cases we can get null if PG gives us back a message earlier than the latest reported flushed LSN
@@ -227,6 +235,7 @@ public class RecordsStreamProducer extends RecordsProducer {
 
         TableSchema tableSchema = tableSchemaFor(tableId);
         if (tableSchema == null) {
+            commitLsn(message);
             return;
         }
         if (tableSchema.keySchema() == null) {
@@ -253,6 +262,7 @@ public class RecordsStreamProducer extends RecordsProducer {
             }
             default: {
                logger.warn("unknown message operation: " + operation);
+               commitLsn(message);
             }
         }
     }

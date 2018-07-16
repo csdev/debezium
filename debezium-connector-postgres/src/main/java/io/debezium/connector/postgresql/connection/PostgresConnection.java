@@ -122,7 +122,7 @@ public class PostgresConnection extends JdbcConnection {
         return ServerInfo.ReplicaIdentity.parseFromDB(replIdentity.toString());
     }
 
-    protected ServerInfo.ReplicationSlot readReplicationSlotInfo(String slotName, String pluginName) throws SQLException {
+    public ServerInfo.ReplicationSlot readReplicationSlotInfo(String slotName, String pluginName) throws SQLException {
         AtomicReference<ServerInfo.ReplicationSlot> replicationSlotInfo = new AtomicReference<>();
         String database = database();
         prepareQuery(
