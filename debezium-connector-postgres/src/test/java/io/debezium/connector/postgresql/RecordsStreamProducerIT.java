@@ -30,6 +30,8 @@ import org.junit.Test;
 import org.junit.rules.TestRule;
 
 import io.debezium.config.CommonConnectorConfig;
+import io.debezium.connector.postgresql.connection.PostgresConnection;
+import io.debezium.connector.postgresql.connection.ServerInfo;
 import io.debezium.data.Envelope;
 import io.debezium.data.VariableScaleDecimal;
 import io.debezium.data.VerifyRecord;
@@ -62,6 +64,7 @@ public class RecordsStreamProducerIT extends AbstractRecordsProducerTest {
                 "DROP TABLE IF EXISTS test_table;" +
                 "CREATE TABLE test_table (pk SERIAL, text TEXT, PRIMARY KEY(pk));" +
                 "CREATE TABLE table_with_interval (id SERIAL PRIMARY KEY, title VARCHAR(512) NOT NULL, time_limit INTERVAL DEFAULT '60 days'::INTERVAL NOT NULL);" +
+                "CREATE TABLE test_blacklisted_table (pk SERIAL, text TEXT, PRIMARY KEY(pk));" +
                 "INSERT INTO test_table(text) VALUES ('insert');";
         TestHelper.execute(statements);
         PostgresConnectorConfig config = new PostgresConnectorConfig(TestHelper.defaultConfig()
@@ -594,6 +597,97 @@ public class RecordsStreamProducerIT extends AbstractRecordsProducerTest {
         recordsProducer.start(consumer, blackHole);
 
         assertInsert(INSERT_NUMERIC_DECIMAL_TYPES_STMT, schemasAndValuesForStringEncodedNumericTypes());
+    }
+
+    @Test
+    public void shouldIgnoreBlacklistedTable() throws Exception {
+        PostgresConnectorConfig config = new PostgresConnectorConfig(TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.TABLE_BLACKLIST, "public.test_blacklisted_table")
+                .build());
+        setupRecordsProducer(config);
+
+        final String statements =
+                "INSERT INTO test_table(text) VALUES ('firstValue');" +
+                "INSERT INTO test_blacklisted_table(text) VALUES ('ignoredValue');" +
+                "INSERT INTO test_table(text) VALUES ('secondValue');";
+
+        consumer = testConsumer(2);
+        recordsProducer.start(consumer, blackHole);
+        executeAndWait(statements);
+
+        final String topicPrefix = "public.test_table";
+        assertRecordInserted(topicPrefix, PK_FIELD, 2);
+        assertRecordInserted(topicPrefix, PK_FIELD, 3);
+    }
+
+    @Test
+    public void shouldCommitLsnsForWhitelistedTable() throws Exception {
+        consumer = testConsumer(1);
+        recordsProducer.start(consumer, blackHole);
+        executeAndWait("INSERT INTO test_table(text) VALUES ('firstValue');");
+
+        final String topicPrefix = "public.test_table";
+        assertRecordInserted(topicPrefix, PK_FIELD, 2);
+
+        PostgresConnection connection = TestHelper.create();
+        connection.setAutoCommit(true);
+        ServerInfo.ReplicationSlot slotInfo = connection.readReplicationSlotInfo("debezium", TestHelper.decoderPlugin().getValue());
+        Long latestFlushedLSN = slotInfo.latestFlushedLSN();
+
+        consumer.expects(1);
+        executeAndWait("INSERT INTO test_table(text) VALUES ('secondValue');");
+        assertRecordInserted(topicPrefix, PK_FIELD, 3);
+
+        int attempts = 0;
+        while (true) {
+            slotInfo = connection.readReplicationSlotInfo("debezium", TestHelper.decoderPlugin().getValue());
+            if (slotInfo.latestFlushedLSN() > latestFlushedLSN) {
+                break;
+
+            }
+            if (++attempts > 20) {
+                throw new RuntimeException(String.format(
+                        "Timeout while waiting for LSN commit. Latest = %d", slotInfo.latestFlushedLSN()));
+            }
+            Thread.sleep(500);
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-800")
+    public void shouldCommitLsnsForBlacklistedTable() throws Exception {
+        PostgresConnectorConfig config = new PostgresConnectorConfig(TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.TABLE_BLACKLIST, "public.test_blacklisted_table")
+                .build());
+        setupRecordsProducer(config);
+
+        consumer = testConsumer(1);
+        recordsProducer.start(consumer, blackHole);
+        executeAndWait("INSERT INTO test_table(text) VALUES ('firstValue');");
+
+        final String topicPrefix = "public.test_table";
+        assertRecordInserted(topicPrefix, PK_FIELD, 2);
+
+        PostgresConnection connection = TestHelper.create();
+        connection.setAutoCommit(true);
+        ServerInfo.ReplicationSlot slotInfo = connection.readReplicationSlotInfo("debezium", TestHelper.decoderPlugin().getValue());
+        Long latestFlushedLSN = slotInfo.latestFlushedLSN();
+
+        TestHelper.execute("INSERT INTO test_blacklisted_table(text) VALUES ('ignoredValue');");
+
+        int attempts = 0;
+        while (true) {
+            slotInfo = connection.readReplicationSlotInfo("debezium", TestHelper.decoderPlugin().getValue());
+            if (slotInfo.latestFlushedLSN() > latestFlushedLSN) {
+                break;
+
+            }
+            if (++attempts > 20) {
+                throw new RuntimeException(String.format(
+                        "Timeout while waiting for LSN commit. Latest = %d", slotInfo.latestFlushedLSN()));
+            }
+            Thread.sleep(500);
+        }
     }
 
     @Test

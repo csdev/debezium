@@ -138,7 +138,7 @@ public class ServerInfo {
     /**
      * Information about a server replication slot
      */
-    protected static class ReplicationSlot {
+    public static class ReplicationSlot {
         protected static final ReplicationSlot INVALID = new ReplicationSlot(false, null);
         
         private boolean active;
@@ -149,15 +149,15 @@ public class ServerInfo {
             this.latestFlushedLSN = latestFlushedLSN;
         }
         
-        protected boolean active() {
+        public boolean active() {
             return active;
         }
         
-        protected Long latestFlushedLSN() {
+        public Long latestFlushedLSN() {
             return latestFlushedLSN;
         }
         
-        protected boolean hasValidFlushedLSN() {
+        public boolean hasValidFlushedLSN() {
             return latestFlushedLSN != null;
         }
     }
